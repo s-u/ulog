@@ -10,7 +10,7 @@
 #include <time.h>
 #include <sys/time.h>
 
-#define VER "1.2-0"
+#define VER "1.3-0"
 
 #define SA struct sockaddr
 #define MAXLINE 1024
@@ -74,7 +74,10 @@ int main(int argc, char **argv)
 {
     int s, i, n, active=1, verb = 0;
     struct sockaddr_un sa, ca;
-    int stdoutlog = 1;
+    struct sockaddr_in sai, cai;
+    SA *ca_ptr;
+    int ca_len = 0;
+    int stdoutlog = 1, udp_port = -1;
     char *log_socket = 0;
 
     i = 0;
@@ -85,7 +88,8 @@ int main(int argc, char **argv)
 	    case 'p': if (++i < argc) prefix = argv[i]; else { fprintf(stderr, "\nERROR: -p is missing the <prefix> argument\n\n"); return 1; } break;
 	    case 'g': if (++i < argc) t_gran = atoi(argv[i]); else { fprintf(stderr, "\nERROR: -g is missing the <granularity> argument\n\n"); return 1; } break;
 	    case 't': if (++i < argc) trigger = argv[i]; else { fprintf(stderr, "\nERROR: -t is missing the <trigger> argument\n\n"); return 1; } break;
-	    case 'h': printf("\n\n %s [-h] [-v] [-p <prefix>] [-g <granularity>] [-t <trigger>] -s <socket>\n\n", argv[0]); return 0;
+	    case 'h': printf("\n\n %s [-h] [-v] [-p <prefix>] [-g <granularity>] [-t <trigger>] { -s <socket> | -u <port> }\n\n", argv[0]); return 0;
+            case 'u': if (++i < argc) udp_port = atoi(argv[i]); else { fprintf(stderr, "\nERROR: -u is missing the <port> argument\n\n"); return 1; } break;
 	    case 'v': { int j = 1; while (argv[i][j] == 'v') { j++; verb++; }; break; }
 	    default: fprintf(stderr, "\nERROR: unknown argument %s\n\n", argv[i]); return 1;
 	    }
@@ -93,11 +97,12 @@ int main(int argc, char **argv)
 	    fprintf(stderr, "\nERROR: unknown argument %s\n\n", argv[i]); return 1;
 	}
     
-    if (!log_socket) { fprintf(stderr, "\nERROR: -s <socket> not specified although mandatory\n\n"); return 1; }
+    if (!log_socket && udp_port < 1) { fprintf(stderr, "\nERROR: both -s <socket> and -u <port> not specified although one is mandatory\n\n"); return 1; }
+    if (log_socket && udp_port > 0) { fprintf(stderr, "\nERROR: both -s <socket> and -u <port> specified although mutually exclusive\n\n"); return 1; }
     
     if (t_gran < 0) t_gran = 0;
     if (verb)
-	fprintf(stderr, "INFO: ulogd " VER ", socket: %s, output prefix: %s, granularity: %d\n", log_socket, prefix ? prefix : "<stdout>", t_gran);
+	fprintf(stderr, "INFO: ulogd " VER ", socket: %s, port: %d, output prefix: %s, granularity: %d\n", log_socket ? log_socket : "<udp>", udp_port, prefix ? prefix : "<stdout>", t_gran);
 
     if (prefix)
 	stdoutlog = 0;
@@ -105,18 +110,32 @@ int main(int argc, char **argv)
 	f = stdout;
 
     DoLog("-- ulog " VER " started --");
-  
-    s = socket(AF_LOCAL,SOCK_DGRAM,0);
+
+    s = (udp_port > 0) ? socket(AF_INET, SOCK_DGRAM, 0) : socket(AF_LOCAL, SOCK_DGRAM, 0);
     if (s == -1) { perror("ERROR: failed to open socket"); return 1; };
-    unlink(log_socket);
-    bzero(&sa, sizeof(sa));
-    sa.sun_family = AF_LOCAL;
-    strcpy(sa.sun_path, log_socket);
-    i = bind(s, (SA*)&sa, sizeof(sa));
+    if (log_socket) {
+        unlink(log_socket);
+        bzero(&sa, sizeof(sa));
+        sa.sun_family = AF_LOCAL;
+        strcpy(sa.sun_path, log_socket);
+        ca_ptr = (SA*) &ca;
+        ca_len = sizeof(ca);
+        i = bind(s, (SA*)&sa, sizeof(sa));
+    } else {
+        int optval = 1;
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval , sizeof(int));
+        bzero(&sai, sizeof(sai));
+        sai.sin_family = AF_INET;
+        sai.sin_addr.s_addr = htonl(INADDR_ANY);
+        sai.sin_port = htons(udp_port);
+        ca_ptr = (SA*) &cai;
+        ca_len = sizeof(cai);
+        i = bind(s, (SA*)&sai, sizeof(sai));
+    }
     if (i == -1) { perror("ERROR: failed to bind socket"); return 2; };
     while (active) {
-	socklen_t len = sizeof(ca);
-	n = recvfrom(s, buf, MAXLINE, 0, (SA*)&ca, &len);
+	socklen_t len = ca_len;
+	n = recvfrom(s, buf, MAXLINE, 0, ca_ptr, &len);
 	if (n > 0) buf[n] = 0;
 	DoLog(buf);
 	fflush(f);
@@ -124,6 +143,6 @@ int main(int argc, char **argv)
     close(s);
     DoLog("-- ulog exited --");
     if (f) fclose(f);
-    unlink(log_socket);
+    if (log_socket) unlink(log_socket);
     return 0;
 }

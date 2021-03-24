@@ -37,6 +37,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 #if TIME_WITH_SYS_TIME
 # include <sys/time.h>
 # include <time.h>
@@ -119,6 +120,12 @@ void ulog_begin() {
 		fcntl(ulog_sock, F_SETFL, flags | O_NONBLOCK);
 	}
 #endif
+#ifdef SO_NOSIGPIPE
+	if (ulog_path[0] == 't') { /* typically only on macOS */
+	    int opt = 1;
+	    setsockopt(ulog_sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&opt, sizeof(int));
+	}
+#endif
     }
 
     {
@@ -152,15 +159,22 @@ void ulog_add(const char *format, ...) {
     va_list(ap);
     va_start(ap, format);
     if (buf_pos) {
-	vsnprintf(buf + buf_pos, sizeof(buf) - buf_pos, format, ap);
+	vsnprintf(buf + buf_pos, sizeof(buf) - buf_pos - 2, format, ap);
 	buf_pos += strlen(buf + buf_pos);
     }
     va_end(ap);
 }
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 void ulog_end() {
-#if defined RSERV_DEBUG || defined ULOG_STDERR
+    /* TCP requires \n termination */
+    if (ulog_port && ulog_path[0] == 't' && buf_pos > 0 && buf[buf_pos - 1] != '\n')
+	buf[buf_pos++] = '\n';
     buf[buf_pos] = 0;
+#if defined RSERV_DEBUG || defined ULOG_STDERR
     fprintf(stderr, "ULOG: %s\n", buf);
 #endif
     if (ulog_port) {
@@ -171,7 +185,18 @@ void ulog_end() {
 	ulog_path[ulog_dcol] = 0;
 	sa.sin_addr.s_addr = inet_addr(ulog_path + 6);
 	ulog_path[ulog_dcol] = ':'; /* we probably don't even need this ... */
-	sendto(ulog_sock, buf, buf_pos, 0, (struct sockaddr*) &sa, sizeof(sa));
+	if (ulog_path[0] == 't') {
+	    int n = send(ulog_sock, buf, buf_pos, MSG_NOSIGNAL);
+	    if (n == -1 && errno == ENOTCONN) {
+		if (connect(ulog_sock, (struct sockaddr*) &sa, sizeof(sa)) == 0)
+		    n = send(ulog_sock, buf, buf_pos, MSG_NOSIGNAL);
+	    }
+	    if (n != buf_pos) {
+		close(ulog_sock);
+		ulog_sock = -1;
+	    }
+	} else
+	    sendto(ulog_sock, buf, buf_pos, 0, (struct sockaddr*) &sa, sizeof(sa));
     } else {
 	struct sockaddr_un sa;
 	if (!buf_pos) return;

@@ -18,7 +18,7 @@
 
 */
 
-#define DEFAULT_ULOG_PORT 514
+#define DEFAULT_ULOG_PORT 5140
 
 #ifdef USE_CONFIG_H
 #include "config.h"

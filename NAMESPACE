@@ -1,2 +1,2 @@
-useDynLib(ulog, C_ulog, C_ulog_init)
-export(ulog, ulog.init)
+useDynLib(ulog, C_ulog, C_ulog_init, C_ulogd)
+export(ulog, ulog.init, ulogd)

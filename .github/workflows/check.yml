@@ -1,10 +1,4 @@
-on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
+on: [push, pull_request]
 
 name: check
 
@@ -12,31 +6,23 @@ jobs:
   check:
     runs-on: ${{ matrix.os }}
 
-    name: ${{ matrix.os }} (${{ matrix.r }})
+    name: ${{ matrix.os }} R ${{ matrix.r-version }}
 
     strategy:
       fail-fast: false
       matrix:
-        os: [ 'macOS-10.15', 'ubuntu-20.04' ]
-        r:  [ 'release' ]
+        os: [ macos-13, macos-14, ubuntu-22.04, ubuntu-24.04 ]
+        r-version: [ release, devel ]
 
     steps:
-      - uses: actions/checkout@v1
-
-      - uses: r-lib/actions/setup-r@master
+      - uses: actions/checkout@v4
+        
+      - name: Install R
+        uses: s-u/R-actions/install@v2
         with:
-          r-version: ${{ matrix.r }}
+          r-version: ${{ matrix.r-version }}
+          tools: base
 
-      - name: Build
-        run: "bash -c '(cd .. && R CMD build ulog)'"
-
-      - name: R CMD check
-        run: "bash -c 'R CMD check --no-manual ../ulog_*.tar.gz'"
-
-      - name: Upload check results
-        if: failure()
-        uses: actions/upload-artifact@master
+      - uses: s-u/R-actions/pkg-check@v2
         with:
-          name: ${{ runner.os }}-r${{ matrix.r }}-results
-          path: ulog.Rcheck
-
+          check-flags: --as-cran
